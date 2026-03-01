@@ -48,46 +48,70 @@ namespace Mediapipe.Unity
 
       if (_enableGlog)
       {
-        if (Glog.LogDir != null)
+        try
         {
-          if (!Directory.Exists(Glog.LogDir))
+          if (Glog.LogDir != null)
           {
-            Directory.CreateDirectory(Glog.LogDir);
+            if (!Directory.Exists(Glog.LogDir))
+            {
+              Directory.CreateDirectory(Glog.LogDir);
+            }
+            Logger.LogVerbose(_TAG, $"Glog will output files under {Glog.LogDir}");
           }
-          Logger.LogVerbose(_TAG, $"Glog will output files under {Glog.LogDir}");
+          Glog.Initialize("MediaPipeUnityPlugin");
+          _isGlogInitialized = true;
         }
-        Glog.Initialize("MediaPipeUnityPlugin");
-        _isGlogInitialized = true;
+        catch (System.Exception e)
+        {
+          _enableGlog = false;
+          _isGlogInitialized = false;
+          Logger.LogWarning(_TAG, $"Failed to initialize glog and disabled it automatically: {e.Message}");
+          Logger.LogWarning(_TAG, "If this keeps happening, disable 'Enable Glog' in Bootstrap Inspector or move the project path to ASCII-only characters.");
+        }
       }
 
       Logger.LogInfo(_TAG, "Initializing AssetLoader...");
-      switch (_assetLoaderType)
+      try
       {
-        case AssetLoaderType.AssetBundle:
-          {
-            AssetLoader.Provide(new AssetBundleResourceManager("mediapipe"));
-            break;
-          }
-        case AssetLoaderType.StreamingAssets:
-          {
-            AssetLoader.Provide(new StreamingAssetsResourceManager());
-            break;
-          }
-        case AssetLoaderType.Local:
-          {
+        switch (_assetLoaderType)
+        {
+          case AssetLoaderType.AssetBundle:
+            {
+              AssetLoader.Provide(new AssetBundleResourceManager("mediapipe"));
+              break;
+            }
+          case AssetLoaderType.StreamingAssets:
+            {
+              AssetLoader.Provide(new StreamingAssetsResourceManager(ResolveStreamingAssetsRelativePath()));
+              break;
+            }
+          case AssetLoaderType.Local:
+            {
 #if UNITY_EDITOR
-            AssetLoader.Provide(new LocalResourceManager());
-            break;
+              AssetLoader.Provide(new LocalResourceManager());
+              break;
 #else
-            Logger.LogError("LocalResourceManager is only supported on UnityEditor");
-            yield break;
+              Logger.LogError("LocalResourceManager is only supported on UnityEditor");
+              yield break;
 #endif
-          }
-        default:
-          {
-            Logger.LogError($"AssetLoaderType is unknown: {_assetLoaderType}");
-            yield break;
-          }
+            }
+          default:
+            {
+              Logger.LogError($"AssetLoaderType is unknown: {_assetLoaderType}");
+              yield break;
+            }
+        }
+      }
+      catch (System.InvalidOperationException e)
+      {
+        if (e.Message.Contains("ResourceManager can be initialized only once"))
+        {
+          Logger.LogWarning(_TAG, "ResourceManager is already initialized. Reusing the existing instance.");
+        }
+        else
+        {
+          throw;
+        }
       }
 
       DecideInferenceMode();
@@ -106,6 +130,28 @@ namespace Mediapipe.Unity
       ImageSourceProvider.ImageSource = GetImageSource(_defaultImageSource);
 
       isFinished = true;
+    }
+
+    private static string ResolveStreamingAssetsRelativePath()
+    {
+#if UNITY_EDITOR
+      // If sample assets are imported under `Assets/MediaPipeUnityPlugin-all`,
+      // Application.streamingAssetsPath does not contain MediaPipe model files.
+      var defaultModelPath = Path.Combine(Application.streamingAssetsPath, "face_detection_short_range.bytes");
+      if (File.Exists(defaultModelPath))
+      {
+        return "";
+      }
+
+      var fallbackRelativePath = Path.Combine("..", "MediaPipeUnityPlugin-all", "Assets", "StreamingAssets");
+      var fallbackModelPath = Path.GetFullPath(Path.Combine(Application.streamingAssetsPath, fallbackRelativePath, "face_detection_short_range.bytes"));
+      if (File.Exists(fallbackModelPath))
+      {
+        Logger.LogWarning(_TAG, $"StreamingAssets fallback is enabled: {fallbackRelativePath}");
+        return fallbackRelativePath;
+      }
+#endif
+      return "";
     }
 
     public ImageSource GetImageSource(ImageSourceType imageSourceType)
